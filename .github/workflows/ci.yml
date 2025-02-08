@@ -1,38 +1,41 @@
 name: Run CI
-on: 
+
+on:
   push:
     branches:
       - master
+  pull_request: # Added pull request trigger
 
 jobs:
   test:
     name: PHP ${{ matrix.php }} CP ${{ matrix.cp }}
     timeout-minutes: 15
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest # Use the latest Ubuntu version
     strategy:
       fail-fast: false
       matrix:
-        php: [ '7.0', '7.1', '7.2', '7.3', '7.4' ]
+        php: [ '7.4', '8.0', '8.1', '8.2', '8.3' ] # Removed EOL PHP versions, added newer ones, starting from 7.4
         cp: [ 'latest' ]
 
     services:
       database:
-        image: mysql:5.6
+        image: mysql:5.7 # Using a more recent MySQL version
         env:
           MYSQL_ROOT_PASSWORD: root
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval=10s --health-timeout=5s --health-retries=5 # Explicitly specify the host
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3 # Use v3 or later for better performance
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          tools: composer
-          extensions: mysql
+          tools: composer:v2 # Specify composer version
+          extensions: mysql, pdo_mysql, bcmath, gd, intl, json, mbstring, xml # Added common extensions
           coverage: none
 
       - name: Tool versions
@@ -40,16 +43,24 @@ jobs:
           php --version
           composer --version
 
-      - name: Get cached composer directories
-        uses: actions/cache@v2
+      - name: Get cached composer dependencies
+        id: composer-cache
+        uses: actions/cache@v3 # Use v3 or later
         with:
-          path: |
-            ./packages
-            ./vendor
-          key: ${{ runner.os }}-${{ hashFiles('./composer.lock') }}
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
 
-      - name: Setup and install composer
-        run: composer install
+      - name: Install Composer dependencies
+        if: steps.composer-cache.outputs.cache-hit != 'true'
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Init DB and CP
+        run: ./tests/bin/install.sh cpc_test root root 127.0.0.1 ${{ matrix.cp }}
+
+      - name: Run tests
+        run: ./vendor/bin/phpunit -c ./phpunit.xml
 
       - name: Init DB and CP
         run: ./tests/bin/install.sh cpc_test root root 127.0.0.1 ${{ matrix.cp }}
